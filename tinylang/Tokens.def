@@ -1,0 +1,61 @@
+#ifndef TOKEN
+#define TOKEN(id)
+#endif
+
+#ifndef PUNCTUATOR
+#define PUNCTUATOR(id, punctuation) TOKEN(id)
+#endif
+
+#ifndef KEYWORD
+#define KEYWORD(id, flag) TOKEN(keyword ## id)
+#endif
+
+
+TOKEN(kUnknown)
+TOKEN(kEOF)
+TOKEN(kIdentifier)
+TOKEN(kIntegerLiteral)
+TOKEN(kStringLiteral)
+
+PUNCTUATOR(kEqual, "=")
+PUNCTUATOR(kHash, "#")
+PUNCTUATOR(kPlus, "+")
+PUNCTUATOR(kMinus, "-")
+PUNCTUATOR(kAsterisk, "*")
+PUNCTUATOR(kSlash, "/")
+PUNCTUATOR(kComma, ",")
+PUNCTUATOR(kPeriod, ".")
+PUNCTUATOR(kColon, ":")
+PUNCTUATOR(kColonEqual, ":=")
+PUNCTUATOR(kSemicolon, ";")
+PUNCTUATOR(kParenthesisLeft, "(")
+PUNCTUATOR(kParenthesisRight, ")")
+PUNCTUATOR(kLessThan, "<")
+PUNCTUATOR(kLessThanEqual, "<=")
+PUNCTUATOR(kGreaterThan, ">")
+PUNCTUATOR(kGreaterThanEqual, ">=")
+
+KEYWORD(AND, kKeywordAll)
+KEYWORD(BEGIN, kKeywordAll)
+KEYWORD(CONST, kKeywordAll)
+KEYWORD(DIV, kKeywordAll)
+KEYWORD(DO, kKeywordAll)
+KEYWORD(ELSE, kKeywordAll)
+KEYWORD(END, kKeywordAll)
+KEYWORD(FROM, kKeywordAll)
+KEYWORD(IF, kKeywordAll)
+KEYWORD(IMPORT, kKeywordAll)
+KEYWORD(MOD, kKeywordAll)
+KEYWORD(MODULE, kKeywordAll)
+KEYWORD(NOT, kKeywordAll)
+KEYWORD(OR, kKeywordAll)
+KEYWORD(PROCEDURE, kKeywordAll)
+KEYWORD(RETURN, kKeywordAll)
+KEYWORD(THEN, kKeywordAll)
+KEYWORD(VAR, kKeywordAll)
+KEYWORD(WHILE, kKeywordAll)
+
+
+#undef TOKEN
+#undef PUNCTUATOR
+#undef KEYWORD

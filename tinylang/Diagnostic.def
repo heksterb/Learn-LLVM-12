@@ -1,0 +1,32 @@
+#ifndef DIAG
+#define DIAG(id, level, message)
+#endif
+
+DIAG(errorUnterminatedComment, Error, "unterminated comment")
+DIAG(errorHexadecimalDigitInDecimal, Error, "decimal number contains hexadecimal digit")
+DIAG(errorUnterminatedCharaterOrString, Error, "unterminated character or string")
+
+DIAG(errorExpected, Error, "expected {0}, but found {1}")
+DIAG(errorModuleIdentifierNotEqual, Error, "module identifier at begin and end not equal")
+DIAG(noteModuleIdentifierDeclaration, Note, "module identifier declared here")
+DIAG(errorProcedureIdentifierNotEqual, Error, "procedure identifier at begin and end not equal")
+DIAG(noteProcedureIdentifierDeclaration, Note, "procedure identifier declared here")
+
+DIAG(errorSymbolDoublyDeclared, Error, "symbol {0} already declared")
+DIAG(errorIncompatibleTypesForOperator, Error, "incompatible types for operator {0}")
+DIAG(errorUndeclaredName, Error, "undeclared name {0}")
+DIAG(errorIfExpressionMustBoolean, Error, "expression of IF statement must have type Boolean")
+DIAG(errorWhileExpressionMustBoolean, Error, "expression of WHILE statement must have type Boolean")
+DIAG(errorVariableDeclarationRequiresType, Error, "variable declaration requires type")
+DIAG(errorReturnMustBeType, Error, "return of function must be type")
+DIAG(errorFunctionCallOnNonfunction, Error, "function call requires a function")
+DIAG(errorProcedureCallOnNonprocedure, Error, "procedure call requires a procedure")
+DIAG(errorWrongNumberOfParameters, Error, "wrong number of parameters")
+DIAG(errorFormalActualParameterIncompatible, Error, "incompatible type of formal and actual parameter")
+DIAG(errorVariableParameterRequiresVariable, Error, "VAR parameter requires variable argument")
+DIAG(warningAmbiguousNegation, Warning, "ambiguous negation (consider using parentheses)")
+DIAG(errorFunctionRequiresReturn, Error, "function requires RETURN with value")
+DIAG(errorProcedureRequiresEmptyReturn, Error, "procedure does not allow RETURN with value")
+DIAG(errorFunctionReturnType, Error, "type of RETURN value not the same as function return type")
+
+#undef DIAG
