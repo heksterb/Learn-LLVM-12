@@ -186,6 +186,55 @@ return op;
 }
 
 
+LeftValue *Parser::parseSelectors(
+	LeftValue	*expression
+	)
+{
+try {
+	switch (Token token = fToken; token.kind()) {
+		case Token::kCaret:
+			expression = fActions.dereferenceSelector(token, expression);
+			
+			advance();
+			break;
+		
+		case Token::kBracketLeft: {
+			advance();
+			
+			Expression *indexExpression = parseExpression();
+			
+			expect(Token::kBracketRight);
+			
+			expression = fActions.indexSelector(token, expression, indexExpression);
+			}
+			break;
+		
+		case Token::kPeriod: {
+			advance();
+			
+			Token identifier = expect(Token::kIdentifier);
+			
+			expression = fActions.fieldSelector(token, expression, identifier.identifier());
+			}
+			break;
+		}
+	}
+
+catch (SyntaxError&) {
+	if (recover({
+		Token::kHash, Token::kParenthesisRight, Token::kAsterisk, Token::kPlus,
+		Token::kComma, Token::kMinus, Token::kSlash, Token::kColonEqual,
+		Token::kSemicolon, Token::kLessThan, Token::kLessThanEqual, Token::kEqual,
+		Token::kGreaterThan, Token::kBracketRight,
+		Token::keywordAND, Token::keywordDIV, Token::keywordDO, Token::keywordELSE,
+		Token::keywordMOD, Token::keywordOR, Token::keywordTHEN
+		})) throw;
+	}
+
+return expression;
+}
+
+
 Expression *Parser::parseFactorFromIdentifier()
 {
 Expression *factor;
@@ -207,20 +256,14 @@ if (advanceIf(Token::kParenthesisLeft)) {
 	factor = fActions.functionCall(declaration, std::move(expressions));
 	}
 
-else if (fToken.isOneOf({
-	Token::kHash, Token::kParenthesisRight, Token::kAsterisk,
-	Token::kPlus, Token::kComma, Token::kMinus,
-	Token::kSlash, Token::kSemicolon, Token::kLessThan,
-	Token::kLessThanEqual, Token::kEqual,
-	Token::kGreaterThan, Token::kGreaterThanEqual,
-	Token::keywordAND, Token::keywordDIV, Token::keywordDO,
-	Token::keywordELSE, Token::keywordEND, Token::keywordMOD,
-	Token::keywordOR, Token::keywordTHEN
-	}))
-	factor = fActions.variable(declaration);
+else if (declaration->fKind == Declaration::kConstant)
+	factor = fActions.constant(declaration);
 
-else
-	throw SyntaxError();
+else {
+	LeftValue *designator = fActions.designator(declaration);
+	
+	factor = parseSelectors(designator);
+	}
 
 return factor;
 }
@@ -258,9 +301,8 @@ try {
 			advance();
 			Expression *expression = parseFactor();
 			factor = fActions.prefixExpression(expression, op);
-			
-			break;
 			}
+			break;
 		
 		default:
 			throw SyntaxError();
@@ -272,7 +314,7 @@ catch (SyntaxError&) {
 		Token::kHash, Token::kParenthesisRight, Token::kAsterisk, Token::kPlus,
 		Token::kComma, Token::kMinus, Token::kSlash, Token::kSemicolon,
 		Token::kLessThan, Token::kLessThanEqual, Token::kEqual, Token::kGreaterThan,
-		Token::kGreaterThanEqual,
+		Token::kGreaterThanEqual, Token::kBracketRight,
 		Token::keywordAND, Token::keywordDIV,
 		Token::keywordDO, Token::keywordELSE, Token::keywordEND, Token::keywordMOD,
 		Token::keywordOR, Token::keywordTHEN
@@ -306,8 +348,9 @@ try {
 
 catch (SyntaxError&) {
 	if (recover({
-		Token::kHash, Token::kParenthesisRight, Token::kPlus,
-		Token::kComma, Token::kMinus, Token::kSemicolon,
+		Token::kParenthesisRight, Token::kBracketRight,
+		Token::kHash, Token::kComma,
+		Token::kPlus, Token::kMinus, Token::kSemicolon,
 		Token::kLessThan, Token::kLessThanEqual, Token::kEqual,
 		Token::kGreaterThan, Token::kGreaterThanEqual,
 		Token::keywordDO, Token::keywordELSE, Token::keywordEND,
@@ -346,7 +389,8 @@ try {
 
 catch (SyntaxError&) {
 	if (recover({
-		Token::kHash, Token::kParenthesisRight, Token::kComma, Token::kSemicolon,
+		Token::kParenthesisRight, Token::kBracketRight,
+		Token::kHash, Token::kComma, Token::kSemicolon,
 		Token::kLessThan, Token::kLessThanEqual, Token::kEqual, Token::kGreaterThan,
 		Token::kGreaterThanEqual, Token::keywordDO, Token::keywordELSE,
 		Token::keywordEND, Token::keywordTHEN
@@ -380,9 +424,9 @@ try {
 
 catch (SyntaxError&) {
 	if (recover({
-		Token::kParenthesisRight, Token::kComma, Token::kSemicolon,
-		Token::keywordDO, Token::keywordELSE, Token::keywordEND,
-		Token::keywordTHEN
+		Token::kParenthesisRight, Token::kBracketRight,
+		Token::kComma, Token::kSemicolon,
+		Token::keywordDO, Token::keywordELSE, Token::keywordEND, Token::keywordTHEN
 		})) throw;
 	
 	expression = nullptr;
@@ -454,15 +498,15 @@ catch (const SyntaxError&) {
 		Token::keywordBEGIN, Token::keywordCONST,
 		Token::keywordEND, Token::keywordFROM,
 		Token::keywordIMPORT, Token::keywordPROCEDURE,
-		Token::keywordVAR
+		Token::keywordTYPE, Token::keywordVAR
 		})) throw;
 	}
 }
 
 
-FormalParameterDeclarations Parser::parseFormalParameter()
+ParameterDeclarations Parser::parseParameter()
 {
-FormalParameterDeclarations parameter;
+ParameterDeclarations parameters;
 
 try {
 	// parse VAR
@@ -475,25 +519,25 @@ try {
 	// parse type declaration
 	Declaration *typeDeclaration = parseQualifiedIdentifier();
 	
-	parameter = fActions.formalParameterDeclaration(identifiers, typeDeclaration, isVariable);
+	parameters = fActions.parameterDeclaration(identifiers, typeDeclaration, isVariable);
 	}
 
 catch (SyntaxError&) {
 	if (recover({ Token::kParenthesisRight, Token::kSemicolon })) throw;
 	}
 
-return parameter;
+return parameters;
 }
 
 
-FormalParameterDeclarations Parser::parseFormalParameterList()
+ParameterDeclarations Parser::parseParameterList()
 {
-FormalParameterDeclarations parameters;
+ParameterDeclarations parameters;
 
 try {
 	do {
 		// parse the formal parameter
-		FormalParameterDeclarations parameter = parseFormalParameter();
+		ParameterDeclarations parameter = parseParameter();
 		
 		// append to all formal parameters
 		parameters.insert(parameters.end(), parameter.begin(), parameter.end());
@@ -508,15 +552,15 @@ return parameters;
 }
 
 
-std::pair<FormalParameterDeclarations, Declaration*> Parser::parseFormalParameters()
+std::pair<ParameterDeclarations, Declaration*> Parser::parseParameters()
 {
-std::pair<FormalParameterDeclarations, Declaration*> parameters;
+std::pair<ParameterDeclarations, Declaration*> parameters;
 
 try {
 	consume(Token::kParenthesisLeft);
 	
 	if (fToken.isOneOf({ Token::keywordVAR, Token::kIdentifier }))
-		parameters.first = parseFormalParameterList();
+		parameters.first = parseParameterList();
 	
 	consume(Token::kParenthesisRight);
 	
@@ -556,6 +600,116 @@ return declaration;
 }
 
 
+RecordTypeDeclaration::Fields Parser::parseField()
+{
+RecordTypeDeclaration::Fields result;
+
+try {
+	std::vector<Token> identifiers = parseIdentifierList();
+	
+	consume(Token::kColon);
+	
+	Declaration *d = parseQualifiedIdentifier();
+	
+	result = fActions.fieldDeclaration(identifiers, d);
+	}
+
+catch (SyntaxError&) {
+	if (recover({ Token::kSemicolon })) throw;
+	}
+
+return result;
+}
+
+
+RecordTypeDeclaration::Fields Parser::parseFieldList()
+{
+RecordTypeDeclaration::Fields fields;
+
+try {
+	do {
+		RecordTypeDeclaration::Fields field = parseField();
+		
+		fields.insert(fields.end(), field.begin(), field.end());
+		} while (advanceIf(Token::kSemicolon));
+	}
+
+catch (SyntaxError&) {
+	if (recover({ Token::keywordEND })) throw;
+	}
+
+return fields;
+}
+
+
+// *** why not return TypeDeclaration
+Declaration *Parser::parseTypeDeclaration()
+{
+Declaration *declaration;
+
+try {
+	Token token = expect(Token::kIdentifier);
+	
+	consume(Token::kEqual);
+	
+	switch (fToken.kind()) {
+		case Token::kIdentifier: {
+			Declaration *d = parseQualifiedIdentifier();
+			
+			declaration = fActions.aliasTypeDeclaration(token, d);
+			}
+			break;
+		
+		case Token::keywordPOINTER: {
+			advance();
+			consume(Token::keywordTO);
+			
+			Declaration *d = parseQualifiedIdentifier();
+			
+			declaration = fActions.pointerTypeDeclaration(token, d);
+			}
+			break;
+		
+		case Token::keywordARRAY: {
+			advance();
+			consume(Token::kBracketLeft);
+			
+			Expression *expression = parseExpression();
+			
+			consume(Token::kBracketRight);
+			consume(Token::keywordOF);
+			
+			Declaration *d = parseQualifiedIdentifier();
+			
+			declaration = fActions.arrayTypeDeclaration(token, expression, d);
+			}
+			break;
+		
+		case Token::keywordRECORD: {
+			advance();
+			RecordTypeDeclaration::Fields fields = parseFieldList();
+			
+			consume(Token::keywordEND);
+			
+			declaration = fActions.recordTypeDeclaration(token, std::move(fields));
+			}
+			break;
+			
+		default:
+			throw SyntaxError();
+		}
+	}
+
+catch (SyntaxError&) {
+	if (recover({ Token::kSemicolon })) throw;
+	
+	declaration = nullptr;
+	}
+
+return declaration;
+}
+
+
 Declaration *Parser::parseQualifiedIdentifier()
 {
 Declaration *declaration = nullptr;
@@ -576,6 +730,7 @@ catch (SyntaxError&) {
 		Token::kPlus, Token::kComma, Token::kMinus, Token::kSlash,
 		Token::kColonEqual, Token::kSemicolon, Token::kLessThan, Token::kLessThanEqual,
 		Token::kEqual, Token::kGreaterThan, Token::kGreaterThanEqual,
+		Token::kBracketLeft, Token::kBracketRight, Token::kCaret,
 		Token::keywordAND, Token::keywordDIV, Token::keywordDO, Token::keywordELSE,
 		Token::keywordEND, Token::keywordMOD, Token::keywordOR, Token::keywordTHEN
 		})) throw;
@@ -620,10 +775,10 @@ try {
 	Semantics::Scope scope(fActions, *procedure);
 	
 	{
-		std::pair<FormalParameterDeclarations, Declaration*> parameters;
+		std::pair<ParameterDeclarations, Declaration*> parameters;
 		
 		if (fToken.kind() == Token::kParenthesisLeft)
-			parameters = parseFormalParameters();
+			parameters = parseParameters();
 		
 		fActions.procedureHeading(procedure, std::move(parameters.first), parameters.second);
 		}
@@ -659,6 +814,14 @@ try {
 			consume(Token::kSemicolon);
 			}
 	
+	else if (advanceIf(Token::keywordTYPE))
+		while (fToken.kind() == Token::kIdentifier) {
+			if (Declaration *const declaration = parseTypeDeclaration())
+				declarations.push_back(declaration);
+			
+			consume(Token::kSemicolon);
+			}
+	
 	else if (advanceIf(Token::keywordVAR))
 		while (fToken.kind() == Token::kIdentifier) {
 			declarations = parseVariableDeclaration();
@@ -683,7 +846,7 @@ catch (SyntaxError&) {
 	if (recover({
 		Token::keywordBEGIN, Token::keywordCONST,
 		Token::keywordEND, Token::keywordPROCEDURE,
-		Token::keywordVAR
+		Token::keywordTYPE, Token::keywordVAR
 		})) throw;
 	}
 
@@ -796,32 +959,33 @@ Token token = fToken;
 
 Declaration *declaration = parseQualifiedIdentifier();
 
-switch (fToken.kind()) {
-	case Token::kColonEqual: {
-		advance();
-		
-		Expression *expression = parseExpression();
-		statement = fActions.assignment(token, declaration, expression);
-		}
-		break;
+if (advanceIf(Token::kParenthesisLeft)) {
+	Expressions expressions;
+	if (fToken.isOneOf({
+		Token::kParenthesisLeft, Token::kPlus,
+		Token::kMinus, Token::keywordNOT,
+		Token::kIdentifier,
+		Token::kIntegerLiteral
+		}))
+		expressions = parseExpressionList();
 	
-	case Token::kParenthesisLeft: {
-		advance();
-		
-		Expressions expressions;
-		if (fToken.isOneOf({
-			Token::kParenthesisLeft, Token::kPlus,
-			Token::kMinus, Token::keywordNOT,
-			Token::kIdentifier,
-			Token::kIntegerLiteral
-			}))
-			expressions = parseExpressionList();
-		
-		consume(Token::kParenthesisRight);
-		
-		statement = fActions.procedureCall(token, declaration, std::move(expressions));
-		}
-		break;
+	consume(Token::kParenthesisRight);
+	
+	statement = fActions.procedureCall(token, declaration, std::move(expressions));
+	}
+
+else {
+	LeftValue *designator = fActions.designator(declaration);
+	
+	designator = parseSelectors(designator);
+	
+	consume(Token::kColonEqual);
+	
+	Expression *expression = parseExpression();
+	
+	statement =
+		expression ? fActions.assignment(token, designator, expression) :
+		nullptr;
 	}
 
 return statement;
@@ -889,13 +1053,18 @@ return statements;
 std::pair<Declarations, Statements> Parser::parseBlock()
 {
 std::pair<Declarations, Statements> block;
+Declarations &resultDeclarations = block.first;
+Statements &resultStatements = block.second;
 
 try {
-	while (fToken.isOneOf({ Token::keywordCONST, Token::keywordPROCEDURE, Token::keywordVAR }))
-		block.first = parseDeclaration();
+	while (fToken.isOneOf({
+		Token::keywordCONST, Token::keywordPROCEDURE,
+		Token::keywordTYPE, Token::keywordVAR
+		}))
+		resultDeclarations.append(parseDeclaration());
 	
 	if (advanceIf(Token::keywordBEGIN))
-		block.second = parseStatementSequence();
+		resultStatements = parseStatementSequence();
 	
 	consume(Token::keywordEND);
 	}

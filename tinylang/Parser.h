@@ -25,6 +25,7 @@ protected:
 	OperatorInfo	parseRelation(),
 			parseAddOperator(),
 			parseMultiplicationOperator();
+	LeftValue	*parseSelectors(LeftValue*);
 	Expression	*parseFactorFromIdentifier(),
 			*parseFactor(),
 			*parseTerm(),
@@ -33,11 +34,15 @@ protected:
 	Expressions	parseExpressionList();
 	std::vector<Token> parseIdentifierList();
 	void		parseImport();
-	FormalParameterDeclarations
-			parseFormalParameterList(),
-			parseFormalParameter();
-	std::pair<FormalParameterDeclarations, Declaration*>
-			parseFormalParameters();
+	RecordTypeDeclaration::Fields
+			parseField(),
+			parseFieldList();
+	Declaration	*parseTypeDeclaration();
+	ParameterDeclarations
+			parseParameter(),
+			parseParameterList();
+	std::pair<ParameterDeclarations, Declaration*>
+			parseParameters();
 	Declarations	parseVariableDeclaration();
 	Declaration	*parseConstantDeclaration(),
 			*parseQualifiedIdentifier(),

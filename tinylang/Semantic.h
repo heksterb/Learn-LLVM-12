@@ -33,7 +33,7 @@ public:
 		};
 
 protected:
-	static TypeDeclaration
+	static PervasiveTypeDeclaration
 			*gTypeBoolean,
 			*gTypeInteger;
 	static BooleanLiteral
@@ -48,7 +48,7 @@ protected:
 			*fScope;
 	
 	
-	void		checkFormalAndActualParameters(llvm::SMLoc, const FormalParameterDeclarations&, const Expressions&);
+	void		checkFormalAndActualParameters(llvm::SMLoc, const ParameterDeclarations&, const Expressions&);
 	bool		isOperatorForType(Token::Kind, TypeDeclaration*);
 
 public:
@@ -58,12 +58,12 @@ public:
 	void		moduleDeclaration(ModuleDeclaration*, const Token&, Declarations&&, Statements&&);
 	Declaration	*constantDeclaration(const Token&, Expression*);
 	Declaration	*qualifiedIdentifierPart(Declaration*, const Token&);
-	Declarations	variableDeclaration(std::vector<Token>&, Declaration*);
+	Declarations	variableDeclaration(const std::vector<Token>&, Declaration*);
 	ProcedureDeclaration *procedureDeclaration(const Token&);
 	void		procedureDeclaration(ProcedureDeclaration*, const Token&, Declarations&&, Statements&&);
-	void		procedureHeading(ProcedureDeclaration*, FormalParameterDeclarations&&, Declaration*);
-	FormalParameterDeclarations formalParameterDeclaration(std::vector<Token>&, Declaration*, bool isVariable);
-	Statement	*assignment(const Token&, Declaration*, Expression*);
+	void		procedureHeading(ProcedureDeclaration*, ParameterDeclarations&&, Declaration*);
+	ParameterDeclarations parameterDeclaration(const std::vector<Token>&, Declaration*, bool isVariable);
+	Statement	*assignment(const Token&, LeftValue*, Expression*);
 	Statement	*procedureCall(const Token&, Declaration*, Expressions&&);
 	Statement	*ifStatement(const Token&, Expression*, Statements&&, Statements&&);
 	Statement	*whileStatement(const Token&, Expression*, Statements&&);
@@ -75,4 +75,14 @@ public:
 	Expression	*term(Expression*, Expression*, OperatorInfo);
 	Expression	*simpleExpression(Expression*, Expression*, OperatorInfo);
 	Expression	*expression(Expression*, Expression*, OperatorInfo);
+	Designator	*dereferenceSelector(const Token&, LeftValue*);
+	Designator	*indexSelector(const Token&, LeftValue*, Expression*);
+	Designator	*fieldSelector(const Token&, LeftValue*, llvm::StringRef);
+	LeftValue	*designator(Declaration*);
+	Expression	*constant(Declaration*);
+	TypeDeclaration	*aliasTypeDeclaration(const Token&, Declaration*);
+	TypeDeclaration	*pointerTypeDeclaration(const Token&, Declaration*);
+	TypeDeclaration	*arrayTypeDeclaration(const Token&, Expression*, Declaration*);
+	TypeDeclaration	*recordTypeDeclaration(const Token&, RecordTypeDeclaration::Fields&&);
+	RecordTypeDeclaration::Fields fieldDeclaration(const std::vector<Token>&, Declaration*);
 	};

@@ -16,7 +16,7 @@
 	Add an empty 'phi' instruction for the declaration at the beginning of the block
 */
 llvm::PHINode *Generator::Module::Procedure::Block::addEmptyPhi(
-	const Declaration &declaration
+	const NameDeclaration &declaration
 	)
 {
 llvm::Type *const type = fProcedure.fGenerator.mapType(declaration);
@@ -29,21 +29,37 @@ return
 
 
 /*	optimizePhi
-
+	Try to replace the given 'phi' instruction with a single common incoming value
+	
+	Return the common incoming value, which may just be the 'phi' instruction itself.
 */
-void Generator::Module::Procedure::Block::optimizePhi(
+llvm::Value *Generator::Module::Procedure::Block::optimizePhi(
 	llvm::PHINode	*phi
 	)
 {
+/* Figure whether all the incoming values of the 'phi' instruction are the same
+   Incoming values that refer to the 'phi' itself are disregarded.
+   *** under what circumstances can the incoming value of the phi be the phi itself?!
+*/
 llvm::Value *same = nullptr;
 for (llvm::Value *value: phi->incoming_values())
-	if (value == same || value == phi)
-		// *** under what circumstances can the incoming value of the phi be the phi itself?!
+	// this incoming value is still the same as the preceding ones?
+	if (value == same)
 		;
 	
-	else if (same && value != same)
-		return;
+	// this incoming value is the 'phi' instruction itself?
+	else if (value == phi)
+		;
 	
+	// there were preceding incoming values
+	else if (same) {
+		// but this incoming value is different?
+		if (value != same)
+			// no optimization possible
+			return phi;
+		}
+	
+	// haven't seen any preceding incoming values yet?
 	else
 		same = value;
 
@@ -62,14 +78,18 @@ phi->eraseFromParent();
 
 for (llvm::PHINode *p: candidatePHIs)
 	optimizePhi(p);
+
+return same;
 }
 
 
 /*	addPhiOperands
-	Add predecessor operands to the given incomplete phi node
+	Add predecessor operands to the given incomplete 'phi' node
+	
+	Return the common incoming value after potential optimization
 */
-void Generator::Module::Procedure::Block::addPhiOperands(
-	const Declaration &declaration,
+llvm::Value *Generator::Module::Procedure::Block::addPhiOperands(
+	const NameDeclaration &declaration,
 	llvm::PHINode	*phi
 	)
 {
@@ -84,7 +104,7 @@ for (llvm::BasicBlock *predecessor: llvm::predecessors(fBlock)) {
 		);
 	}
 
-optimizePhi(phi);
+return optimizePhi(phi);
 }
 
 
@@ -96,7 +116,7 @@ void Generator::Module::Procedure::Block::seal()
 assert(!fSealed);
 
 // complete all the yet-incomplete PHI nodes
-for (const std::pair<llvm::PHINode*, const Declaration*> &phi: fIncompletePhis)
+for (const std::pair<llvm::PHINode*, const NameDeclaration*> &phi: fIncompletePhis)
 	addPhiOperands(*phi.second, phi.first);
 fIncompletePhis.clear();
 
@@ -110,15 +130,10 @@ fSealed = true;
 	Return the value corresponding to the given declaration
 */
 llvm::Value *Generator::Module::Procedure::Block::read(
-	const Declaration &declaration
+	const NameDeclaration &declaration
 	)
 {
 llvm::Value *result;
-
-assert(
-	llvm::isa<VariableDeclaration>(declaration) ||
-	llvm::isa<FormalParameterDeclaration>(declaration)
-	);
 
 // found definition of that declaration in this block?
 if (
@@ -142,13 +157,11 @@ else {
 	else if (Block *predecessor = fProcedure.BlockOf(fBlock->getSinglePredecessor()))
 		result = predecessor->read(declaration);
 	
-	// multiple prececessors
+	// multiple predecessors
 	else {
-		// create empty phi instruction to break potential cycles
+		// create empty 'phi' instruction to break potential cycles
 		llvm::PHINode *const phi = addEmptyPhi(declaration);
-		addPhiOperands(declaration, phi);
-		
-		result = phi;
+		result = addPhiOperands(declaration, phi);
 		}
 	
 	// add definition within the context of this block
@@ -163,14 +176,11 @@ return result;
 	Set the value corresponding to the given declaration
 */
 void Generator::Module::Procedure::Block::write(
-	const Declaration &declaration,
+	const NameDeclaration &declaration,
 	llvm::Value	*value
 	)
 {
-assert(
-	llvm::isa<VariableDeclaration>(declaration) ||
-	llvm::isa<FormalParameterDeclaration>(declaration)
-	);
+assert(llvm::isa<NameDeclaration>(declaration));
 
 fDefinitions[&declaration] = value;
 }
@@ -200,11 +210,11 @@ llvm::Type *const resultType =
 		generator.fTypeVoid;
 
 llvm::SmallVector<llvm::Type*, 8> parameterTypes;
-const FormalParameterDeclarations &parameters = declaration.fParameters;
+const ParameterDeclarations &parameters = declaration.fParameters;
 std::transform(
 	std::begin(parameters), std::end(parameters),
 	std::back_inserter(parameterTypes),
-	[&generator](FormalParameterDeclaration *parameter) { return generator.mapType(*parameter); }
+	[&generator](ParameterDeclaration *parameter) { return generator.mapType(*parameter); }
 	);
 
 return llvm::FunctionType::get(resultType, parameterTypes, false /* isVarArgs */);
@@ -234,10 +244,10 @@ llvm::Function *function = llvm::Function::Create(
 // give parameters a name
 for (unsigned argumentI = 0; argumentI < function->arg_size(); argumentI++) {
 	llvm::Argument &argument = *function->getArg(argumentI);
-	FormalParameterDeclaration &parameterDeclaration = *declaration.fParameters[argumentI];
+	ParameterDeclaration &parameterDeclaration = *declaration.fParameters[argumentI];
 	
 	if (parameterDeclaration.fIsVariable) {
-		llvm::AttrBuilder attributes(generator.fContext);
+		llvm::AttrBuilder attributes;
 		llvm::TypeSize size = result.getDataLayout().getTypeStoreSize(
 			generator.mapType(*parameterDeclaration.fType)
 			);
@@ -273,13 +283,12 @@ Generator::Module::Procedure::Procedure(
 /*	createBlock
 	Create a basic block
 */
-template <typename ...Args>
 Generator::Module::Procedure::Block &Generator::Module::Procedure::createBlock(
-	Args		&&...args
+	const char	name[]
 	)
 {
 // create the LLVM block
-llvm::BasicBlock *block = llvm::BasicBlock::Create(std::forward<Args>(args)...);
+llvm::BasicBlock *block = llvm::BasicBlock::Create(fGenerator.fContext, name, fFunction);
 
 // now create the block object in our map
 return fDefinitions.try_emplace(block, *this, block).first->second;
@@ -287,7 +296,7 @@ return fDefinitions.try_emplace(block, *this, block).first->second;
 
 
 /*	readVariable
-	Emit code to read a value from a given variable
+	Return the LLVM value corresponding to the given variable
 */
 llvm::Value *Generator::Module::Procedure::readVariable(
 	const VariableDeclaration &declaration
@@ -301,10 +310,7 @@ if (declaration.fEnclosing == &fDeclaration)
 
 // variable's enclosing declaration is this procedure's module?
 else if (declaration.fEnclosing == &fModule.fDeclaration)
-	result = fBuilder.CreateLoad(
-		fGenerator.mapType(declaration),
-		fModule.fGlobals.find(&declaration)->second
-		);
+	result = fModule.fGlobals.find(&declaration)->second;
 
 else
 	throw "unsupported: nested procedures";
@@ -317,21 +323,13 @@ return result;
 	Emit code to read a value from a given parameter
 */
 llvm::Value *Generator::Module::Procedure::readVariable(
-	const FormalParameterDeclaration &declaration
+	const ParameterDeclaration &declaration
 	)
 {
-llvm::Value *result;
-
-if (declaration.fIsVariable)
-	result = fBuilder.CreateLoad(
-		fGenerator.mapType(declaration)->getPointerElementType(),
-		fFormalParameters.find(&declaration)->second
-		);
-
-else
-	result = Current().read(declaration);
-
-return result;
+return
+	declaration.fIsVariable ?
+		fParameters.find(&declaration)->second :
+		Current().read(declaration);
 }
 
 
@@ -339,7 +337,7 @@ return result;
 	Emit code to read a value from a given declaration
 */
 llvm::Value *Generator::Module::Procedure::readVariable(
-	const Declaration &declaration
+	const NameDeclaration &declaration
 	)
 {
 llvm::Value *result;
@@ -350,11 +348,8 @@ switch (declaration.fKind) {
 		break;
 
 	case Declaration::kParameter:
-		result = readVariable(llvm::cast<FormalParameterDeclaration>(declaration));
+		result = readVariable(llvm::cast<ParameterDeclaration>(declaration));
 		break;
-	
-	default:
-		throw "unsupported declaration";
 	}
 
 return result;
@@ -389,14 +384,14 @@ else
 	Emit code to write a value to a given formal parameter
 */
 void Generator::Module::Procedure::writeVariable(
-	const FormalParameterDeclaration &declaration,
+	const ParameterDeclaration &declaration,
 	llvm::Value	*value
 	)
 {
 if (declaration.fIsVariable)
 	fBuilder.CreateStore(
 		value,
-		fFormalParameters.find(&declaration)->second
+		fParameters.find(&declaration)->second
 		);
 
 else
@@ -420,7 +415,7 @@ switch (declaration.fKind) {
 		break;
 	
 	case Declaration::kParameter:
-		writeVariable(llvm::cast<FormalParameterDeclaration>(declaration) ,value);
+		writeVariable(llvm::cast<ParameterDeclaration>(declaration), value);
 		break;
 	
 	default:
@@ -481,6 +476,86 @@ return result;
 }
 
 
+llvm::Value *Generator::Module::Procedure::emitGEP(
+	const Designator &designator
+	)
+{
+llvm::Value *result;
+
+if (designator.fSelector->fKind == Selector::kDereference) {
+	result = emit(*designator.fLeftValue);
+	result = fBuilder.CreateLoad(result->getType()->getPointerElementType(), result);
+	}
+
+else {
+	llvm::SmallVector<llvm::Value*, 4> indexes;
+	
+	// find contiguous range of accessor selectors
+	const Expression *e;
+	const Designator *d = &designator;
+	do {
+		switch (const Selector *s = d->fSelector; s->fKind) {
+			case Selector::kIndex: {
+				const IndexSelector &index = *static_cast<const IndexSelector*>(s);
+				
+				indexes.push_back(emit(*index.fIndex));
+				}
+				break;
+			
+			case Selector::kField: {
+				const FieldSelector &field = *static_cast<const FieldSelector*>(s);
+				
+				indexes.push_back(
+					llvm::ConstantInt::get(
+						fGenerator.fTypeInteger64, field.fIndex
+						)
+					);
+				}
+				break;
+			}
+		
+		e = d->fLeftValue;
+		}
+		while (
+			(d = llvm::dyn_cast<Designator>(e)) && d->fSelector &&
+			(d->fSelector->fKind == Selector::kIndex || d->fSelector->fKind == Selector::kField)
+			);
+
+	result = emit(*e);
+	result = fBuilder.CreateInBoundsGEP(result, indexes);
+	}
+
+return result;
+}
+
+
+/*	emit
+	Emit code for a variable access expression
+*/
+llvm::Value *Generator::Module::Procedure::emit(
+	const Access	&access
+	)
+{
+return readVariable(*access.fVariable);
+}
+
+
+/*	emit
+	Emit code for a designator expression
+*/
+llvm::Value *Generator::Module::Procedure::emit(
+	const Designator &designator
+	)
+{
+llvm::Value *result;
+
+result = emitGEP(designator);
+result = fBuilder.CreateLoad(result->getType()->getPointerElementType(), result);
+
+return result;
+}
+
+
 /*	emit
 	Emit code for an expression
 */
@@ -499,16 +574,12 @@ switch (expression.fKind) {
 		result = emit(static_cast<const PrefixExpression&>(expression));
 		break;
 	
-	case Expression::kVariable:
-		result = readVariable(
-			*static_cast<const VariableAccess&>(expression).fVariable
-			);
+	case Expression::kAccess:
+		result = emit(static_cast<const Access&>(expression));
 		break;
 	
-	case Expression::kParameter:
-		result = readVariable(
-			*static_cast<const FormalParameterAccess&>(expression).fParameter
-			);
+	case Expression::kDesignator:
+		result = emit(static_cast<const Designator&>(expression));
 		break;
 	
 	case Expression::kConstant:
@@ -544,7 +615,29 @@ void Generator::Module::Procedure::emit(
 	)
 {
 llvm::Value *value = emit(*statement.fExpression);
-writeVariable(*statement.fDeclaration, value);
+
+Expression &leftValue = *statement.fLeftValue;
+
+switch (leftValue.fKind) {
+	case Expression::kAccess: {
+		const Access &access = static_cast<Access&>(leftValue);
+		
+		writeVariable(*access.fVariable, value);
+		}
+		break;
+	
+	case Expression::kDesignator: {
+		const Designator &designator = static_cast<Designator&>(leftValue);
+		
+		llvm::Value *base = emitGEP(designator);
+		
+		fBuilder.CreateStore(value, base);
+		}
+		break;
+	}
+	// *** why 32-bit integers here?
+	// *** why dereference not implemented here?
+	// *** why contiguous selector kinds not implemented here?
 }
 
 
@@ -568,12 +661,12 @@ void Generator::Module::Procedure::emit(
 {
 // create the required basic blocks
 Block
-	&blockIf = createBlock(fGenerator.fContext, "if.body", fFunction),
+	&blockIf = createBlock("if.body"),
 	*blockElse =
 		!statement.fElseStatements.empty() ?
-			&createBlock(fGenerator.fContext, "else.body", fFunction) :
+			&createBlock("else.body") :
 			nullptr,
-	&blockAfter = createBlock(fGenerator.fContext, "after.if", fFunction);
+	&blockAfter = createBlock("after.if");
 
 llvm::Value *condition = emit(*statement.fCondition);
 fBuilder.CreateCondBr(condition, blockIf, blockElse ? *blockElse : blockAfter);
@@ -606,9 +699,9 @@ void Generator::Module::Procedure::emit(
 	)
 {
 Block
-	&blockCondition = createBlock(fGenerator.fContext, "while.cond", fFunction),
-	&blockBody = createBlock(fGenerator.fContext, "while.body", fFunction),
-	&blockAfter = createBlock(fGenerator.fContext, "after.while", fFunction);
+	&blockCondition = createBlock("while.cond"),
+	&blockBody = createBlock("while.body"),
+	&blockAfter = createBlock("after.while");
 
 Current().seal();
 
@@ -697,16 +790,16 @@ for (const Statement *const statement: statements)
 */
 void Generator::Module::Procedure::operator()()
 {
-Block &block = createBlock(fGenerator.fContext, "entry", fFunction);
+Block &block = createBlock("entry");
 fBuilder.SetInsertPoint(block);
 
 // parallel iteration over parameters/arguments
 for (unsigned argumentI = 0; argumentI < fFunction->arg_size(); argumentI++) {
 	llvm::Argument &argument = *fFunction->getArg(argumentI);
-	FormalParameterDeclaration &parameterDeclaration = *fDeclaration.fParameters[argumentI];
+	ParameterDeclaration &parameterDeclaration = *fDeclaration.fParameters[argumentI];
 	
-	// create mapping of FormalParameter to llvm::Argument for VAR parameters
-	fFormalParameters[&parameterDeclaration] = &argument;
+	// create mapping of Parameter to llvm::Argument for VAR parameters
+	fParameters[&parameterDeclaration] = &argument;
 	
 	block.fDefinitions.try_emplace(&parameterDeclaration, &argument);
 	}
@@ -727,7 +820,7 @@ for (const Declaration *const declaration: fDeclaration.fDeclarations)
 emit(fDeclaration.fStatements);
 
 // make sure block has a terminating instruction?
-if (fBuilder.GetInsertBlock()->getTerminator())
+if (!fBuilder.GetInsertBlock()->getTerminator())
 	fBuilder.CreateRetVoid();
 
 Current().seal();
@@ -850,16 +943,96 @@ Generator::Generator(
 
 
 /*	mapType
+	Return the LLVM IR type for the given 'pervasive type' declaration
+*/
+llvm::Type *Generator::mapType(
+	const PervasiveTypeDeclaration &declaration
+	)
+{
+return
+	declaration.fName == "BOOLEAN" ? fTypeInteger1 :
+	declaration.fName == "INTEGER" ? fTypeInteger64 :
+	nullptr;
+}
+
+
+/*	mapType
+	Return the LLVM IR type for the given alias type declaration
+*/
+llvm::Type *Generator::mapType(
+	const AliasTypeDeclaration &declaration
+	)
+{
+return mapType(*declaration.fType);
+}
+
+
+/*	mapType
+	Return the LLVM IR type for the given array type declaration
+*/
+llvm::Type *Generator::mapType(
+	const ArrayTypeDeclaration &declaration
+	)
+{
+llvm::Type *const component = mapType(*declaration.fType);
+Expression *const count = declaration.fCount;
+
+return llvm::ArrayType::get(component, 5 /* *** evaluate count */);
+}
+
+
+/*	mapType
+	Return the LLVM IR type for the type declaration
+*/
+llvm::Type *Generator::mapType(
+	const RecordTypeDeclaration &declaration
+	)
+{
+llvm::SmallVector<llvm::Type*, 4> fields;
+std::transform(
+	std::begin(declaration.fFields), std::end(declaration.fFields),
+	std::back_inserter(fields),
+	[this](const RecordTypeDeclaration::Field &field) {
+		return mapType(*field.fType);
+		}
+	);
+
+return llvm::StructType::create(fields, declaration.fName, false);
+}
+
+
+/*	mapType
 	Return the LLVM IR type for the type declaration
 */
 llvm::Type *Generator::mapType(
 	const TypeDeclaration &declaration
 	)
 {
-llvm::Type *const result =
-	declaration.fName == "BOOLEAN" ? fTypeInteger1 :
-	declaration.fName == "INTEGER" ? fTypeInteger64 :
-	nullptr;
+llvm::Type *result = fTypes[&declaration];
+
+if (!result) {
+	switch (declaration.fKind) {
+		case Declaration::kTypePervasive:
+			result = mapType(llvm::cast<PervasiveTypeDeclaration>(declaration));
+			break;
+		
+		case Declaration::kTypeAlias:
+			result = mapType(llvm::cast<AliasTypeDeclaration>(declaration));
+			break;
+		
+		case Declaration::kTypeArray:
+			result = mapType(llvm::cast<ArrayTypeDeclaration>(declaration));
+			break;
+		
+		case Declaration::kTypeRecord:
+			result = mapType(llvm::cast<RecordTypeDeclaration>(declaration));
+			break;
+		}
+	
+	// cache result
+	if (result) fTypes[&declaration] = result;
+	}
+
 if (!result) llvm::report_fatal_error("unsupported type");
 
 return result;
@@ -877,7 +1050,7 @@ llvm::Type *type;
 
 switch (declaration.fKind) {
 	case Declaration::kParameter: {
-		const FormalParameterDeclaration &formalParameter = llvm::cast<FormalParameterDeclaration>(declaration);
+		const ParameterDeclaration &formalParameter = llvm::cast<ParameterDeclaration>(declaration);
 		
 		type = mapType(*formalParameter.fType);
 		if (formalParameter.fIsVariable)
@@ -887,10 +1060,6 @@ switch (declaration.fKind) {
 	
 	case Declaration::kVariable:
 		type = mapType(*llvm::cast<VariableDeclaration>(declaration).fType);
-		break;
-	
-	case Declaration::kType:
-		type = mapType(llvm::cast<TypeDeclaration>(declaration));
 		break;
 	}
 

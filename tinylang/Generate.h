@@ -26,6 +26,7 @@ protected:
 	llvm::LLVMContext &fContext;
 	
 	// state of conversion
+	llvm::DenseMap<const TypeDeclaration*, llvm::Type*> fTypes;
 	llvm::Type	*const fTypeVoid,
 			*const fTypeInteger1,
 			*const fTypeInteger32,
@@ -33,7 +34,11 @@ protected:
 	llvm::Constant	*const fInteger32Zero;
 	
 	
-	llvm::Type	*mapType(const TypeDeclaration&),
+	llvm::Type	*mapType(const PervasiveTypeDeclaration&),
+			*mapType(const AliasTypeDeclaration&),
+			*mapType(const ArrayTypeDeclaration&),
+			*mapType(const RecordTypeDeclaration&),
+			*mapType(const TypeDeclaration&),
 			*mapType(const Declaration&);
 	std::string	mangleName(const Declaration&);
 
@@ -111,7 +116,7 @@ protected:
 	// state of conversion
 	llvm::IRBuilder<> fBuilder;
 	llvm::DenseMap<llvm::BasicBlock*, Block> fDefinitions;
-	llvm::DenseMap<FormalParameterDeclaration*, llvm::Argument*> fFormalParameters;
+	llvm::DenseMap<ParameterDeclaration*, llvm::Argument*> fParameters;
 	llvm::Function	*fFunction;
 	
 	
@@ -120,22 +125,25 @@ protected:
 	
 	
 	// basic blocks
-	template <typename ...Args>
-	Block		&createBlock(Args&&...);
+	Block		&createBlock(const char name[]);
 	Block		*BlockOf(llvm::BasicBlock*);
 	Block		&Current();
 	
 	// variable access
 	llvm::Value	*readVariable(const VariableDeclaration&),
-			*readVariable(const FormalParameterDeclaration&),
-			*readVariable(const Declaration&);
+			*readVariable(const ParameterDeclaration&),
+			*readVariable(const NameDeclaration&);
 	void		writeVariable(const VariableDeclaration&, llvm::Value*),
-			writeVariable(const FormalParameterDeclaration&, llvm::Value*),
+			writeVariable(const ParameterDeclaration&, llvm::Value*),
 			writeVariable(const Declaration&, llvm::Value*);
+	
+	llvm::Value	*emitGEP(const Designator&);
 	
 	// expressions
 	llvm::Value	*emit(const InfixExpression&),
 			*emit(const PrefixExpression&),
+			*emit(const Access&),
+			*emit(const Designator&),
 			*emit(const Expression&);
 	
 	// statements
@@ -169,7 +177,7 @@ struct Generator::Module::Procedure::Block {
 	llvm::DenseMap<const Declaration*, llvm::TrackingVH<llvm::Value>> fDefinitions;
 	
 	// incompleted phi instructions
-	llvm::DenseMap<llvm::PHINode*, const Declaration*> fIncompletePhis;
+	llvm::DenseMap<llvm::PHINode*, const NameDeclaration*> fIncompletePhis;
 	
 	bool		fSealed;
 
@@ -186,11 +194,11 @@ public:
 	operator	llvm::BasicBlock*() { return fBlock; }
 	llvm::BasicBlock *operator->() { return fBlock; }
 	
-	void		addPhiOperands(const Declaration&, llvm::PHINode*);
-	llvm::PHINode	*addEmptyPhi(const Declaration&);
-	void		optimizePhi(llvm::PHINode*);
-	llvm::Value	*read(const Declaration&);
-	void		write(const Declaration&, llvm::Value*);
+	llvm::PHINode	*addEmptyPhi(const NameDeclaration&);
+	llvm::Value	*addPhiOperands(const NameDeclaration&, llvm::PHINode*);
+	llvm::Value	*optimizePhi(llvm::PHINode*);
+	llvm::Value	*read(const NameDeclaration&);
+	void		write(const NameDeclaration&, llvm::Value*);
 	void		seal();
 	};
 

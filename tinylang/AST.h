@@ -10,12 +10,12 @@
 
 struct Declaration;
 struct Expression;
-struct FormalParameterDeclaration;
+struct ParameterDeclaration;
 struct Statement;
 
 using Declarations = llvm::SmallVector<Declaration*>;
 using Expressions = llvm::SmallVector<Expression*>;
-using FormalParameterDeclarations = llvm::SmallVector<FormalParameterDeclaration*>;
+using ParameterDeclarations = llvm::SmallVector<ParameterDeclaration*>;
 using Statements = llvm::SmallVector<Statement*>;
 
 
@@ -30,7 +30,11 @@ struct Declaration {
 	enum Kind {
 		kModule,
 		kConstant,
-		kType,
+		kTypeAlias,
+		kTypeArray,
+		kTypePervasive,
+		kTypePointer,
+		kTypeRecord,
 		kVariable,
 		kParameter,
 		kProcedure
@@ -94,53 +98,167 @@ struct ConstantDeclaration : public Declaration {
 
 
 struct TypeDeclaration : public Declaration {
-	static bool	classof(const Declaration *d) { return d->fKind == kType; }
+	static bool	classof(const Declaration *d) {
+				return
+					d->fKind >= kTypeAlias &&
+					d->fKind <= kTypeRecord;
+				}
 	
 	
 			TypeDeclaration(
-				Declaration *enclosing,
-				llvm::SMLoc location,
-				llvm::StringRef name
+				Kind		kind,
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name
 				) :
-				Declaration(kType, enclosing, location, name)
+				Declaration(kind, enclosing, location, name)
 				{}
 	};
 
 
-struct VariableDeclaration : public Declaration {
-	static bool	classof(const Declaration *d) { return d->fKind == kVariable; }
+struct AliasTypeDeclaration : public TypeDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kTypeAlias; }
 	
 	
 	TypeDeclaration	*fType;
 	
-			VariableDeclaration(
-				Declaration *enclosing,
-				llvm::SMLoc location,
-				llvm::StringRef name,
-				TypeDeclaration *type
+			AliasTypeDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				TypeDeclaration	*type
 				) :
-				Declaration(kVariable, enclosing, location, name),
+				TypeDeclaration(kTypeAlias, enclosing, location, name),
 				fType(type)
 				{}
 	};
 
 
-struct FormalParameterDeclaration : public Declaration {
-	static bool	classof(const Declaration *d) { return d->fKind == kParameter; }
+struct ArrayTypeDeclaration : public TypeDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kTypeArray; }
 	
 	
 	TypeDeclaration	*fType;
+	Expression	*fCount;
+	
+			ArrayTypeDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				TypeDeclaration	*type,
+				Expression	*count
+				) :
+				TypeDeclaration(kTypeArray, enclosing, location, name),
+				fType(type),
+				fCount(count)
+				{}
+	};
+
+
+struct PervasiveTypeDeclaration : public TypeDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kTypePervasive; }
+	
+	
+			PervasiveTypeDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name
+				) :
+				TypeDeclaration(kTypePervasive, enclosing, location, name)
+				{}
+	};
+
+
+struct PointerTypeDeclaration : public TypeDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kTypePointer; }
+	
+	
+	TypeDeclaration	*fType;
+	
+			PointerTypeDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				TypeDeclaration	*type
+				) :
+				TypeDeclaration(kTypePointer, enclosing, location, name),
+				fType(type)
+				{}
+	};
+
+
+struct RecordTypeDeclaration : public TypeDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kTypeRecord; }
+	
+	
+	struct Field {
+		llvm::SMLoc	fLocation;
+		llvm::StringRef	fName;
+		TypeDeclaration	*fType;
+		};
+	
+	using Fields = std::vector<Field>;
+	
+	
+	Fields		fFields;
+	
+			RecordTypeDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				std::vector<Field> &&fields
+				) :
+				TypeDeclaration(kTypeRecord, enclosing, location, name),
+				fFields(std::move(fields))
+				{}
+	};
+
+
+struct NameDeclaration : public Declaration {
+	TypeDeclaration	*fType;
+	
+			NameDeclaration(
+				Kind		kind,
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				TypeDeclaration	*type
+				) :
+				Declaration(kind, enclosing, location, name),
+				fType(type)
+				{}
+	};
+
+
+struct VariableDeclaration : public NameDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kVariable; }
+	
+	
+			VariableDeclaration(
+				Declaration	*enclosing,
+				llvm::SMLoc	location,
+				llvm::StringRef	name,
+				TypeDeclaration	*type
+				) :
+				NameDeclaration(kVariable, enclosing, location, name, type)
+				{}
+	};
+
+
+struct ParameterDeclaration : public NameDeclaration {
+	static bool	classof(const Declaration *d) { return d->fKind == kParameter; }
+	
+	
 	bool		fIsVariable;
 	
-			FormalParameterDeclaration(
+			ParameterDeclaration(
 				Declaration *enclosing,
 				llvm::SMLoc location,
 				llvm::StringRef name,
 				TypeDeclaration *type,
 				bool isVariable
 				) :
-				Declaration(kParameter, enclosing, location, name),
-				fType(type),
+				NameDeclaration(kParameter, enclosing, location, name, type),
 				fIsVariable(isVariable)
 				{}
 	};
@@ -150,7 +268,7 @@ struct ProcedureDeclaration : public Declaration {
 	static bool	classof(const Declaration *d) { return d->fKind == kProcedure; }
 	
 	
-	FormalParameterDeclarations fParameters;
+	ParameterDeclarations fParameters;
 	TypeDeclaration	*fReturnType;
 	Declarations	fDeclarations;
 	Statements	fStatements;
@@ -161,6 +279,80 @@ struct ProcedureDeclaration : public Declaration {
 				llvm::StringRef name
 				) :
 				Declaration(kProcedure, enclosing, location, name)
+				{}
+	};
+
+
+
+/*
+
+	designator selectors
+
+*/
+
+struct Selector {
+	enum Kind {
+		kIndex,
+		kField,
+		kDereference
+		};
+	
+	Kind		fKind;
+	TypeDeclaration	*fType;			// type of the selector expression
+	
+			Selector(
+				Kind		kind,
+				TypeDeclaration	*type
+				) :
+				fKind(kind),
+				fType(type)
+				{}
+	};
+
+
+struct IndexSelector : public Selector {
+	static bool	classof(const Selector *s) { return s->fKind == kIndex; }
+	
+	
+	Expression	*fIndex;
+	
+			IndexSelector(
+				TypeDeclaration	*type,
+				Expression 	*index
+				) :
+				Selector(kIndex, type),
+				fIndex(index)
+				{}
+	};
+
+
+struct FieldSelector : public Selector {
+	static bool	classof(const Selector *s) { return s->fKind == kField; }
+	
+	
+	uint32_t	fIndex;
+	llvm::StringRef	fName;
+	
+			FieldSelector(
+				TypeDeclaration	*type,
+				uint32_t	index,
+				llvm::StringRef	name
+				) :
+				Selector(kField, type),
+				fIndex(index),
+				fName(name)
+				{}
+	};
+
+
+struct DereferenceSelector : public Selector {
+	static bool	classof(const Selector *s) { return s->fKind == kDereference; }
+	
+	
+			DereferenceSelector(
+				TypeDeclaration	*type
+				) :
+				Selector(kDereference, type)
 				{}
 	};
 
@@ -201,7 +393,8 @@ struct Expression {
 		kPrefix,
 		kInteger,
 		kBoolean,
-		kVariable,
+		kAccess,
+		kDesignator,
 		kParameter,
 		kConstant,
 		kFunction,
@@ -213,9 +406,9 @@ struct Expression {
 	bool		fIsConstant;
 	
 			Expression(
-				Kind kind,
-				TypeDeclaration *type,
-				bool isConstant
+				Kind		kind,
+				TypeDeclaration	*type,
+				bool		isConstant
 				) :
 				fKind(kind),
 				fType(type),
@@ -303,32 +496,40 @@ struct BooleanLiteral : public Expression {
 	};
 
 
-struct VariableAccess : public Expression {
-	static bool	classof(const Expression *e) { return e->fKind == kVariable; }
+struct LeftValue : public Expression {
+	using		Expression::Expression;
+	};
+
+
+struct Access : public LeftValue {
+	static bool	classof(const Expression *e) { return e->fKind == kAccess; }
 	
 	
-	VariableDeclaration *fVariable;
+	NameDeclaration	*fVariable;
 	
-			VariableAccess(
-				VariableDeclaration *variable
+			Access(
+				NameDeclaration *variable
 				) :
-				Expression(kVariable, variable->fType, false),
+				LeftValue(kAccess, variable->fType, false),
 				fVariable(variable)
 				{}
 	};
 
 
-struct FormalParameterAccess : public Expression {
-	static bool	classof(const Expression *e) { return e->fKind == kParameter; }
+struct Designator : public LeftValue {
+	static bool	classof(const Expression *e) { return e->fKind == kDesignator; }
 	
 	
-	FormalParameterDeclaration *fParameter;
+	LeftValue	*fLeftValue;
+	Selector	*fSelector;
 	
-			FormalParameterAccess(
-				FormalParameterDeclaration *parameter
+			Designator(
+				LeftValue	*leftValue,
+				Selector	*selector
 				) :
-				Expression(kParameter, parameter->fType, false),
-				fParameter(parameter)
+				LeftValue(kDesignator, selector->fType, false),
+				fLeftValue(leftValue),
+				fSelector(selector)
 				{}
 	};
 
@@ -391,15 +592,15 @@ struct Statement {
 
 
 struct AssignmentStatement : public Statement {
-	Declaration	*fDeclaration;
+	LeftValue	*fLeftValue;
 	Expression	*fExpression;
 	
 			AssignmentStatement(
-				Declaration *declaration,
-				Expression *expression
+				LeftValue	*leftValue,
+				Expression	*expression
 				) :
 				Statement(kAssignment),
-				fDeclaration(declaration),
+				fLeftValue(leftValue),
 				fExpression(expression)
 				{}
 	};

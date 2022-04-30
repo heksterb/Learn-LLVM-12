@@ -1,3 +1,7 @@
+.phony: default
+default: gcd Point.o
+
+
 CXXFLAGS := -I /usr/local/include/ -g
 CPPFLAGS := --std=c++17 -fno-rtti
 LIBS := \
@@ -32,9 +36,12 @@ LIBS := \
 	-lLLVMSupport \
 	-lLLVMDemangle \
 	-lpthread -ldl
-# LIBS := $(shell llvm-config --libs) -lpthread -ldl
+
+
+# pattern rule to invoke our compiler
 %.o: %.mod tinylang
 	./tinylang --filetype=obj $<
+
 
 gcd: gcd.c Gcd.o
 	$(CC) $^ -o $@

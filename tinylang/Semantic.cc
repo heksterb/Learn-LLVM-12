@@ -1,11 +1,12 @@
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/ADT/StringSet.h>
 
 #include "Semantic.h"
 
 
-TypeDeclaration
-	*Semantics::gTypeBoolean = new TypeDeclaration({}, {}, "BOOLEAN"),
-	*Semantics::gTypeInteger = new TypeDeclaration({}, {}, "INTEGER");
+PervasiveTypeDeclaration
+	*Semantics::gTypeBoolean = new PervasiveTypeDeclaration({}, {}, "BOOLEAN"),
+	*Semantics::gTypeInteger = new PervasiveTypeDeclaration({}, {}, "INTEGER");
 
 BooleanLiteral
 	*Semantics::gLiteralFalse = new BooleanLiteral(false, gTypeBoolean),
@@ -102,14 +103,14 @@ return result;
 
 
 Declarations Semantics::variableDeclaration(
-	std::vector<Token> &identifiers,
+	const std::vector<Token> &identifiers,
 	Declaration	*declaration
 	)
 {
 // declaration must be for a type
 TypeDeclaration *const typeDeclaration = llvm::dyn_cast<TypeDeclaration>(declaration);
 if (!typeDeclaration && !identifiers.empty()) {
-	Token &identifier = identifiers.front();
+	const Token &identifier = identifiers.front();
 	fDiagnostics.report(
 		identifier.location(),
 		Diagnostics::errorVariableDeclarationRequiresType,
@@ -178,14 +179,14 @@ procedure->fStatements = std::move(statements);
 
 void Semantics::procedureHeading(
 	ProcedureDeclaration	*const procedure,
-	FormalParameterDeclarations &&parameters,
+	ParameterDeclarations &&parameters,
 	Declaration	*returnDeclaration
 	)
 {
 procedure->fParameters = std::move(parameters);
 
-TypeDeclaration *const returnType = llvm::dyn_cast<TypeDeclaration>(returnDeclaration);
-if (!returnType) {
+TypeDeclaration *const returnType = llvm::dyn_cast_or_null<TypeDeclaration>(returnDeclaration);
+if (returnDeclaration && !returnType) {
 	fDiagnostics.report(returnDeclaration->fLocation, Diagnostics::errorReturnMustBeType);
 	
 	return;
@@ -195,8 +196,8 @@ procedure->fReturnType = returnType;
 }
 
 
-FormalParameterDeclarations Semantics::formalParameterDeclaration(
-	std::vector<Token> &identifiers,
+ParameterDeclarations Semantics::parameterDeclaration(
+	const std::vector<Token> &identifiers,
 	Declaration	*declaration,
 	bool		isVariable
 	)
@@ -204,7 +205,7 @@ FormalParameterDeclarations Semantics::formalParameterDeclaration(
 // declaration must be for a type
 TypeDeclaration *const typeDeclaration = llvm::dyn_cast<TypeDeclaration>(declaration);
 if (!typeDeclaration && !identifiers.empty()) {
-	Token &identifier = identifiers.front();
+	const Token &identifier = identifiers.front();
 	fDiagnostics.report(
 		identifier.location(),
 		Diagnostics::errorVariableDeclarationRequiresType,
@@ -214,9 +215,9 @@ if (!typeDeclaration && !identifiers.empty()) {
 	return {};
 	}
 
-FormalParameterDeclarations declarations;
+ParameterDeclarations declarations;
 for (const Token &identifier: identifiers) {
-	FormalParameterDeclaration *declaration = new FormalParameterDeclaration(
+	ParameterDeclaration *declaration = new ParameterDeclaration(
 		fScope->fDeclaration,
 		identifier.location(), identifier.identifier(),
 		typeDeclaration,
@@ -238,19 +239,11 @@ return declarations;
 
 Statement *Semantics::assignment(
 	const Token	&token,
-	Declaration	*declaration,
+	LeftValue	*leftValue,
 	Expression	*expression
 	)
 {
-TypeDeclaration *type;
-
-if (VariableDeclaration *variable = llvm::dyn_cast<VariableDeclaration>(declaration))
-	type = variable->fType;
-
-else if (FormalParameterDeclaration *parameter = llvm::dyn_cast<FormalParameterDeclaration>(declaration))
-	type = parameter->fType;
-
-else {
+if (!leftValue) {
 	/* This clause is hidden under a comment "Emit error" in the original source code;
 	   it's being triggered by the assignments "a := b" and "b := t", where 'a' and 'b'
 	   are not variables but arguments.  This putative failure is also hit in the
@@ -260,19 +253,20 @@ else {
 	return {};
 	}
 
+TypeDeclaration *type = expression->fType;
 if (type != expression->fType) {
 	fDiagnostics.report(token.location(), Diagnostics::errorIncompatibleTypesForOperator, Token::getPunctuatorSpelling(Token::kColonEqual));
 	
 	return {};
 	}
 
-return new AssignmentStatement(declaration, expression);
+return new AssignmentStatement(leftValue, expression);
 }
 
 
 void Semantics::checkFormalAndActualParameters(
 	llvm::SMLoc	location,
-	const FormalParameterDeclarations &formals,
+	const ParameterDeclarations &formals,
 	const Expressions &actuals
 	)
 {
@@ -282,20 +276,20 @@ if (formals.size() != actuals.size()) {
 	}
 
 // parallel iteration over formal and actual parameters
-const FormalParameterDeclaration *const *formalP = formals.data();
+const ParameterDeclaration *const *formalP = formals.data();
 const Expression *const *actualP = actuals.data();
 for (
-	const FormalParameterDeclaration *const *const formalPE = formalP + formals.size();
+	const ParameterDeclaration *const *const formalPE = formalP + formals.size();
 	formalP < formalPE;
 	++formalP, ++actualP
 	) {
-	const FormalParameterDeclaration *const formal = *formalP;
+	const ParameterDeclaration *const formal = *formalP;
 	const Expression *const actual = *actualP;
 	
 	if (formal->fType != actual->fType)
 		fDiagnostics.report(location, Diagnostics::errorFormalActualParameterIncompatible);
 	
-	if (formal->fIsVariable && llvm::isa<FormalParameterAccess>(actual))
+	if (formal->fIsVariable && llvm::isa<Designator>(actual))
 		fDiagnostics.report(location, Diagnostics::errorVariableParameterRequiresVariable);
 	}
 }
@@ -446,51 +440,6 @@ return new FunctionCallExpression(procedure, parameters);
 }
 
 
-Expression *Semantics::variable(
-	Declaration	*declaration
-	)
-{
-Expression *expression;
-
-switch (declaration->fKind) {
-	case Declaration::kVariable: {
-		VariableDeclaration *variable = static_cast<VariableDeclaration*>(declaration);
-		
-		expression = new VariableAccess(variable);
-		}
-		break;
-	
-	case Declaration::kParameter: {
-		FormalParameterDeclaration *parameter = static_cast<FormalParameterDeclaration*>(declaration);
-		
-		expression = new FormalParameterAccess(parameter);
-		}
-		break;
-	
-	case Declaration::kConstant: {
-		ConstantDeclaration *constant = static_cast<ConstantDeclaration*>(declaration);
-		
-		if (constant == gConstantFalse)
-			expression = gLiteralFalse;
-		
-		else if (constant == gConstantTrue)
-			expression = gLiteralTrue;
-		
-		else
-			return nullptr;
-		
-		expression = new ConstantAccess(constant);
-		}
-		break;
-	
-	default:
-		return nullptr;
-	}
-
-return expression;
-}
-
-
 bool Semantics::isOperatorForType(
 	Token::Kind	kind,
 	TypeDeclaration	*type
@@ -552,8 +501,7 @@ else {
 		
 		switch (expression->fKind) {
 			case Expression::kInteger:
-			case Expression::kVariable:
-			case Expression::kParameter:
+			case Expression::kDesignator:
 			case Expression::kConstant:
 				ambiguous = false;
 				break;
@@ -700,6 +648,289 @@ else {
 	}
 
 return expression;
+}
+
+
+Designator *Semantics::dereferenceSelector(
+	const Token	&token,
+	LeftValue	*expression
+	)
+{
+PointerTypeDeclaration *const pointerType = llvm::dyn_cast<PointerTypeDeclaration>(expression->fType);
+if (!pointerType) throw "dereference operator needs value of pointer type";
+
+return new Designator(
+	expression,
+	new DereferenceSelector(pointerType->fType)
+	);
+}
+
+
+Designator *Semantics::indexSelector(
+	const Token	&token,
+	LeftValue	*expression,
+	Expression	*indexExpression
+	)
+{
+ArrayTypeDeclaration *const arrayType = llvm::dyn_cast<ArrayTypeDeclaration>(expression->fType);
+if (!arrayType) throw "index expression needs value of array type";
+
+return new Designator(
+	expression,
+	new IndexSelector(arrayType->fType, indexExpression)
+	);
+}
+
+
+Designator *Semantics::fieldSelector(
+	const Token	&token,
+	LeftValue	*expression,
+	llvm::StringRef	identifier
+	)
+{
+RecordTypeDeclaration *const recordType = llvm::dyn_cast<RecordTypeDeclaration>(expression->fType);
+if (!recordType) throw "field selection needs value of record type";
+
+const std::vector<RecordTypeDeclaration::Field>::iterator fieldI = std::find_if(
+	std::begin(recordType->fFields), std::end(recordType->fFields),
+	[&identifier](const RecordTypeDeclaration::Field &field) {
+		return field.fName == identifier;
+		}
+	);
+if (fieldI == std::end(recordType->fFields)) throw "can't find field";
+
+return
+	new Designator(
+		expression,
+		new FieldSelector(
+			fieldI->fType,
+			std::distance(fieldI, std::begin(recordType->fFields)),
+			identifier
+			)
+		);
+}
+
+
+LeftValue *Semantics::designator(
+	Declaration	*declaration
+	)
+{
+LeftValue *expression;
+
+if (!declaration) return {};
+
+switch (declaration->fKind) {
+	case Declaration::kVariable: {
+		VariableDeclaration *variable = static_cast<VariableDeclaration*>(declaration);
+		
+		expression = new Access(variable);
+		}
+		break;
+	
+	case Declaration::kParameter: {
+		ParameterDeclaration *parameter = static_cast<ParameterDeclaration*>(declaration);
+		
+		expression = new Access(parameter);
+		}
+		break;
+	
+	default:
+		return nullptr;
+	}
+
+return expression;
+}
+
+
+Expression *Semantics::constant(
+	Declaration	*declaration
+	)
+{
+ConstantDeclaration *constant = static_cast<ConstantDeclaration*>(declaration);
+Expression *result;
+
+if (constant == gConstantFalse)
+	result = gLiteralFalse;
+
+else if (constant == gConstantTrue)
+	result = gLiteralTrue;
+
+else
+	result = new ConstantAccess(constant);
+
+return result;
+}
+
+
+TypeDeclaration	*Semantics::aliasTypeDeclaration(
+	const Token	&identifier,
+	Declaration	*declaration
+	)
+{
+TypeDeclaration *const type = llvm::dyn_cast<TypeDeclaration>(declaration);
+if (!type) {
+	fDiagnostics.report(
+		identifier.location(),
+		Diagnostics::errorVariableDeclarationRequiresType,
+		identifier.identifier()
+		);
+	
+	return {};
+	}
+
+AliasTypeDeclaration *const result = new AliasTypeDeclaration(fScope->fDeclaration, identifier.location(), identifier.identifier(), type);
+
+if (!fScope->insert(result)) {
+	fDiagnostics.report(identifier.location(), Diagnostics::errorSymbolDoublyDeclared, identifier.identifier());
+	
+	return {};
+	}
+
+return result;
+}
+
+
+TypeDeclaration	*Semantics::arrayTypeDeclaration(
+	const Token	&identifier,
+	Expression	*expression,
+	Declaration	*declaration
+	)
+{
+if (
+	!expression ||
+	expression->fType->fName != "INTEGER"
+	)
+	return {};
+
+TypeDeclaration *const type = llvm::dyn_cast<TypeDeclaration>(declaration);
+if (!type) {
+	fDiagnostics.report(
+		identifier.location(),
+		Diagnostics::errorVariableDeclarationRequiresType,
+		identifier.identifier()
+		);
+	
+	return {};
+	}
+
+ArrayTypeDeclaration *const result = new ArrayTypeDeclaration(
+	fScope->fDeclaration,
+	identifier.location(), identifier.identifier(),
+	type, expression
+	);
+
+if (!fScope->insert(result)) {
+	fDiagnostics.report(identifier.location(), Diagnostics::errorSymbolDoublyDeclared, identifier.identifier());
+	
+	return {};
+	}
+
+return result;
+}
+
+
+TypeDeclaration	*Semantics::pointerTypeDeclaration(
+	const Token	&identifier,
+	Declaration	*declaration
+	)
+{
+TypeDeclaration *const type = llvm::dyn_cast<TypeDeclaration>(declaration);
+if (!type) {
+	fDiagnostics.report(
+		identifier.location(),
+		Diagnostics::errorVariableDeclarationRequiresType,
+		identifier.identifier()
+		);
+	
+	return {};
+	}
+
+PointerTypeDeclaration *const result = new PointerTypeDeclaration(
+	fScope->fDeclaration,
+	identifier.location(), identifier.identifier(),
+	type
+	);
+
+if (!fScope->insert(result)) {
+	fDiagnostics.report(identifier.location(), Diagnostics::errorSymbolDoublyDeclared, identifier.identifier());
+	
+	return {};
+	}
+
+return result;
+}
+
+
+TypeDeclaration	*Semantics::recordTypeDeclaration(
+	const Token	&identifier,
+	RecordTypeDeclaration::Fields &&fields
+	)
+{
+llvm::StringSet<> fieldsSet;
+if (std::any_of(
+	std::begin(fields), std::end(fields),
+	[&fieldsSet](const RecordTypeDeclaration::Field &field) {
+		return !fieldsSet.insert(field.fName).second;
+		}
+	)) {
+	// *** diagnostic should be for field
+	fDiagnostics.report(identifier.location(), Diagnostics::errorSymbolDoublyDeclared, identifier.identifier());
+	
+	return {};
+	}
+
+RecordTypeDeclaration *const result = new RecordTypeDeclaration(
+	fScope->fDeclaration,
+	identifier.location(), identifier.identifier(),
+	std::move(fields)
+	);
+
+if (!fScope->insert(result)) {
+	fDiagnostics.report(identifier.location(), Diagnostics::errorSymbolDoublyDeclared, identifier.identifier());
+	
+	return {};
+	}
+
+return result;
+}
+
+
+RecordTypeDeclaration::Fields Semantics::fieldDeclaration(
+	const std::vector<Token> &identifiers,
+	Declaration	*declaration
+	)
+{
+std::vector<RecordTypeDeclaration::Field> result;
+
+TypeDeclaration *const type = llvm::dyn_cast<TypeDeclaration>(declaration);
+if (!type) {
+	if (!identifiers.empty()) {
+		const Token &identifier = identifiers.front();
+		
+		fDiagnostics.report(
+			identifier.location(),
+			Diagnostics::errorVariableDeclarationRequiresType,
+			identifier.identifier()
+			);
+		}
+	
+	return {};
+	}
+
+std::transform(
+	std::begin(identifiers), std::end(identifiers),
+	std::back_inserter(result),
+	[&result, type](const Token &token) {
+		RecordTypeDeclaration::Field field;
+		field.fLocation = token.location();
+		field.fName = token.identifier();
+		field.fType = type;
+		
+		return field;
+		}
+	);
+
+return result;
 }
 
 

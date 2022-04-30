@@ -2,11 +2,11 @@
 #include <llvm/CodeGen/CommandFlags.h>
 #include <llvm/IR/IRPrintingPasses.h>
 #include <llvm/IR/LegacyPassManager.h>
-#include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Host.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/WithColor.h>
