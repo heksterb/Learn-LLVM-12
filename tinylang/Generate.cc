@@ -271,9 +271,9 @@ Generator::Module::Procedure::Procedure(
 	const ProcedureDeclaration &declaration,
 	llvm::Module	&result
 	) :
-	fModule(module),
-	fGenerator(fModule.fGenerator),
+	fGenerator(module.fGenerator),
 	fDeclaration(declaration),
+	fModule(module),
 	fBuilder(fGenerator.fContext),
 	fFunction(createFunction(fGenerator, declaration, result))
 {
@@ -834,19 +834,39 @@ Current().seal();
 
 */
 
+/*	Module
+	Prepare to generate code for a module
+*/
+Generator::Module::Module(
+	Generator	&generator,
+	llvm::TargetMachine &targetMachine,
+	const ModuleDeclaration &declaration,
+	const std::filesystem::path &file
+	) :
+	fGenerator(generator),
+	fTargetMachine(targetMachine),
+	fDeclaration(declaration),
+	
+	// create "LLVM module"
+	fModule(std::make_unique<llvm::Module>(file.native(), generator.fContext))
+{
+fModule->setTargetTriple(fTargetMachine.getTargetTriple().getTriple());
+fModule->setDataLayout(fTargetMachine.createDataLayout());
+}
+
+
 /*	emit
 	Emit code for a module-level ('global') variable declaration
 */
 void Generator::Module::emit(
-	const VariableDeclaration &declaration,
-	llvm::Module	&module
+	const VariableDeclaration &declaration
 	)
 {
 // emit code to create global variable
 (void) fGlobals.try_emplace(
 	&declaration,
 	new llvm::GlobalVariable(
-		module,
+		*fModule,
 		fGenerator.mapType(*declaration.fType),
 		false /* isConstant */,
 		llvm::GlobalValue::PrivateLinkage,
@@ -861,12 +881,11 @@ void Generator::Module::emit(
 	Emit code for a procedure declaration
 */
 void Generator::Module::emit(
-	const ProcedureDeclaration &declaration,
-	llvm::Module	&module
+	const ProcedureDeclaration &declaration
 	)
 {
 // emit the procedure
-Procedure::Generate(Procedure(*this, declaration, module));
+Procedure::Generate(Procedure(*this, declaration, *fModule));
 }
 
 
@@ -874,48 +893,112 @@ Procedure::Generate(Procedure(*this, declaration, module));
 	Emit code for the given module-level declaration
 */
 void Generator::Module::emit(
-	const Declaration &declaration,
-	llvm::Module	&module
+	const Declaration &declaration
 	)
 {
 // simulate virtual function dispatch for LLVM-style inheritance
 // *** this must be handled carefully to prevent infinite recursion!
 switch (declaration.fKind) {
 	case Declaration::kVariable:
-		emit(
-			llvm::cast<const VariableDeclaration>(declaration),
-			module
-			);
+		emit(llvm::cast<const VariableDeclaration>(declaration));
 		break;
 	
 	case Declaration::kProcedure:
-		emit(
-			llvm::cast<const ProcedureDeclaration>(declaration),
-			module
-			);
+		emit(llvm::cast<const ProcedureDeclaration>(declaration));
 		break;
 	}
+}
+
+
+/*	aliasType
+	Return the TBAA metadata for the record type declaration
+*/
+llvm::MDNode *Generator::Module::aliasType(
+	const RecordTypeDeclaration &declaration
+	)
+{
+llvm::StructType *const type = llvm::cast<llvm::StructType>(fGenerator.mapType(declaration));
+const llvm::StructLayout *const layout = fModule->getDataLayout().getStructLayout(type);
+
+// construct the fields list for the TBAA 'struct' node
+llvm::SmallVector<std::pair<llvm::MDNode*, uint64_t>> fields;
+std::transform(
+	std::begin(declaration.fFields), std::end(declaration.fFields),
+	std::back_inserter(fields),
+	[&](const RecordTypeDeclaration::Field &f) {
+		return std::pair<llvm::MDNode*, uint64_t>(
+			aliasType(*f.fType),
+			layout->getElementOffset(
+				// index of field in record
+				std::distance(&f, &*std::begin(declaration.fFields))
+				)
+			);
+		}
+	);
+
+llvm::StringRef name = fGenerator.mangleName(declaration);
+
+return fGenerator.fMetadataHelper.createTBAAStructTypeNode(name, fields);
+}
+
+
+/*	aliasType
+	Return the TBAA metadata for the declaration
+*/
+llvm::MDNode *Generator::Module::aliasType(
+	const TypeDeclaration &declaration
+	)
+{
+llvm::MDNode *result = fAliases[&declaration];
+
+// not cached?
+if (!result) {
+	switch (declaration.fKind) {
+		case Declaration::kTypePervasive:
+			result = fGenerator.fMetadataHelper.createTBAAScalarTypeNode(declaration.fName, fGenerator.fAliasRoot);
+			break;
+		
+		case Declaration::kTypePointer:
+			result = fGenerator.fMetadataHelper.createTBAAScalarTypeNode("any pointer", fGenerator.fAliasRoot);
+			break;
+		
+		case Declaration::kTypeRecord:
+			result = aliasType(static_cast<const RecordTypeDeclaration&>(declaration));
+			break;
+		}
+	
+	fAliases[&declaration] = result;
+	}
+
+return result;
+}
+
+
+/*	accessTag
+	Return the TBAA 'access tag' for the type declaration
+	
+	This is the 'alias type' metadata node for pointers, and null for everything else
+*/
+llvm::MDNode *Generator::Module::accessTag(
+	const TypeDeclaration	&declaration
+	)
+{
+return
+	declaration.fKind == Declaration::kTypePointer ?
+		aliasType(declaration) :
+		nullptr;
 }
 
 
 /*	()
 	Generate module code into the given file
 */
-std::unique_ptr<llvm::Module> Generator::Module::operator()(
-	const std::filesystem::path &file
-	)
+void Generator::Module::operator()()
 {
-// create "LLVM module"
-std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>(file.native(), fGenerator.fContext);
-module->setTargetTriple(fTargetMachine.getTargetTriple().getTriple());
-module->setDataLayout(fTargetMachine.createDataLayout());
-
 // for each declaration
 for (const Declaration *const declaration: fDeclaration.fDeclarations)
 	// emit code for the declaration
-	emit(*declaration, *module);
-
-return module;
+	emit(*declaration);
 }
 
 
@@ -937,7 +1020,9 @@ Generator::Generator(
 	fTypeInteger1(llvm::Type::getInt1Ty(context)),
 	fTypeInteger32(llvm::Type::getInt32Ty(context)),
 	fTypeInteger64(llvm::Type::getInt64Ty(context)),
-	fInteger32Zero(llvm::ConstantInt::get(fTypeInteger32, 0, true /* isSigned */))
+	fInteger32Zero(llvm::ConstantInt::get(fTypeInteger32, 0, true /* isSigned */)),
+	fMetadataHelper(llvm::MDBuilder(context)),
+	fAliasRoot(fMetadataHelper.createTBAARoot("Tinylang TBAA"))
 {
 }
 

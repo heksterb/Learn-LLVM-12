@@ -3,7 +3,7 @@ default: gcd Point.o
 
 
 CXXFLAGS := -I /usr/local/include/ -g
-CPPFLAGS := --std=c++17 -fno-rtti
+CPPFLAGS := --std=c++17 -fno-rtti -Wreorder
 LIBS := \
 	-lLLVMX86AsmParser \
 	-lLLVMX86CodeGen \

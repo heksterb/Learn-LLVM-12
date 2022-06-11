@@ -752,6 +752,7 @@ try {
 	consume(Token::kColon);
 	
 	Declaration *identifier = parseQualifiedIdentifier();
+	if (!identifier) return {};
 	
 	declarations = fActions.variableDeclaration(identifiers, identifier);
 	}

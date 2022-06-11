@@ -7,6 +7,8 @@
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/Target/TargetMachine.h>
 
 #include "AST.h"
@@ -21,25 +23,31 @@
 struct Generator {
 	struct Module;
 
+private:
+	llvm::DenseMap<const TypeDeclaration*, llvm::Type*> fTypes;
+	llvm::Type	*mapType(const PervasiveTypeDeclaration&),
+			*mapType(const AliasTypeDeclaration&),
+			*mapType(const ArrayTypeDeclaration&),
+			*mapType(const RecordTypeDeclaration&),
+			*mapType(const TypeDeclaration&);
+
 protected:
 	// arguments to conversion
 	llvm::LLVMContext &fContext;
 	
 	// state of conversion
-	llvm::DenseMap<const TypeDeclaration*, llvm::Type*> fTypes;
 	llvm::Type	*const fTypeVoid,
 			*const fTypeInteger1,
 			*const fTypeInteger32,
 			*const fTypeInteger64;
 	llvm::Constant	*const fInteger32Zero;
 	
+	// type-based alias analysis (TBAA)
+	llvm::MDBuilder	fMetadataHelper;
+	llvm::MDNode	*fAliasRoot;
 	
-	llvm::Type	*mapType(const PervasiveTypeDeclaration&),
-			*mapType(const AliasTypeDeclaration&),
-			*mapType(const ArrayTypeDeclaration&),
-			*mapType(const RecordTypeDeclaration&),
-			*mapType(const TypeDeclaration&),
-			*mapType(const Declaration&);
+	llvm::Type	*mapType(const Declaration&);
+	
 	std::string	mangleName(const Declaration&);
 
 public:
@@ -64,35 +72,42 @@ public:
 struct Generator::Module {
 	struct Procedure;
 
+private:
+	llvm::MDNode	*aliasType(const RecordTypeDeclaration&),
+			*aliasType(const TypeDeclaration&);
+
 protected:
 	// arguments to conversion
 	Generator	&fGenerator;
 	llvm::TargetMachine &fTargetMachine; 
 	const ModuleDeclaration &fDeclaration;
 	
+	std::unique_ptr<llvm::Module> fModule;
+	
 	// state of conversion
 	llvm::DenseMap<const Declaration*, llvm::GlobalObject*> fGlobals;
 	
+	// type-based alias analysis (TBAA)
+	llvm::DenseMap<const TypeDeclaration*, llvm::MDNode*> fAliases;
 	
-	void		emit(const VariableDeclaration&, llvm::Module&),
-			emit(const ProcedureDeclaration&, llvm::Module&),
-			emit(const Declaration&, llvm::Module&);
+	void		emit(const VariableDeclaration&),
+			emit(const ProcedureDeclaration&),
+			emit(const Declaration&);
 	
-	std::unique_ptr<llvm::Module> operator()(const std::filesystem::path&);
+	llvm::MDNode	*accessTag(const TypeDeclaration&);
+	
+	void		operator()();
 
 public:
-	static std::unique_ptr<llvm::Module> Generate(Module&&, const std::filesystem::path&);
+	static std::unique_ptr<llvm::Module> Generate(Module&&);
 	
 	
 			Module(
 				Generator	&generator,
 				llvm::TargetMachine &targetMachine,
-				const ModuleDeclaration &declaration
-				) :
-				fGenerator(generator),
-				fTargetMachine(targetMachine),
-				fDeclaration(declaration)
-				{}
+				const ModuleDeclaration &declaration,
+				const std::filesystem::path&
+				);
 	};
 
 
@@ -109,11 +124,11 @@ struct Generator::Module::Procedure {
 
 protected:
 	// arguments to conversion
-	Module		&fModule;
 	Generator	&fGenerator;
 	const ProcedureDeclaration &fDeclaration;
 	
 	// state of conversion
+	Module		&fModule;
 	llvm::IRBuilder<> fBuilder;
 	llvm::DenseMap<llvm::BasicBlock*, Block> fDefinitions;
 	llvm::DenseMap<ParameterDeclaration*, llvm::Argument*> fParameters;
@@ -240,10 +255,11 @@ return fDefinitions.find(fBuilder.GetInsertBlock())->second;
 	Emit code for the given module; guarantees that it can only be done once
 */
 inline std::unique_ptr<llvm::Module> Generator::Module::Generate(
-	Module		&&module,
-	const std::filesystem::path &file
+	Module		&&module
 	) {
-	return module(file);
+	module();
+	
+	return std::move(module.fModule);
 	}
 
 
@@ -255,5 +271,5 @@ inline std::unique_ptr<llvm::Module> Generator::operator()(
 	const std::filesystem::path &file,
 	const ModuleDeclaration &moduleDeclaration
 	) {
-	return Module::Generate(Module(*this, machine, moduleDeclaration), file);
+	return Module::Generate(Module(*this, machine, moduleDeclaration, file));
 	}
