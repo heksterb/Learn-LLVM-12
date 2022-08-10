@@ -1,10 +1,11 @@
 .phony: default
-default: gcd Point.o
+default: gcd point
 
 
 CXXFLAGS := -I /usr/local/include/ -g
 CPPFLAGS := --std=c++17 -fno-rtti -Wreorder
 LIBS := \
+	-lLLVMPasses \
 	-lLLVMX86AsmParser \
 	-lLLVMX86CodeGen \
 	-lLLVMX86Desc \
@@ -38,12 +39,19 @@ LIBS := \
 	-lpthread -ldl
 
 
-# pattern rule to invoke our compiler
+# pattern rule to invoke our compiler to generate object code
 %.o: %.mod tinylang
 	./tinylang --filetype=obj $<
 
+# pattern rule to invoke our compiler to generate LLVM IR
+%.ll: %.mod tinylang
+	./tinylang --emit-llvm $<
+
 
 gcd: gcd.c Gcd.o
+	$(CC) $^ -o $@
+
+point: point.c Point.o
 	$(CC) $^ -o $@
 
 tinylang: main.cc Diagnostic.o Tokens.o Lexer.o Parser.o Semantic.o Generate.o AST.o
@@ -63,6 +71,14 @@ Generate.o: Generate.cc Generate.h AST.h
 
 AST.o: AST.cc AST.h
 
+
+.PHONY: test
+test: gcd point
+	./gcd 3 9
+	./point 999
+	./tinylang --emit-llvm -O0 Const.mod
+	./tinylang --emit-llvm -O2 Const.mod
+
 .PHONY: clean
 clean:
-	rm -f gcd gcd.o tinylang Diagnostic.o Tokens.o Lexer.o Parser.o Semantic.o Generate.o AST.o
+	rm -f gcd gcd.o tinylang Diagnostic.o Tokens.o Lexer.o Parser.o Semantic.o Generate.o AST.o Gcd.o Point.o

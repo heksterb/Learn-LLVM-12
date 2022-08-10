@@ -490,7 +490,12 @@ if (designator.fSelector->fKind == Selector::kDereference) {
 else {
 	llvm::SmallVector<llvm::Value*, 4> indexes;
 	
-	// find contiguous range of accessor selectors
+	/* Not entirely sure what this does: why we need this first zero index.  Without it, the eventual
+	   type is pointer to 'struct' instead of pointer to the field type (integer).  So it leaves
+	   somehow an extra undereferenced pointer. */
+	indexes.push_back(fGenerator.fInteger32Zero);
+	
+	// find contiguous range of (field or array) accessor selectors
 	const Expression *e;
 	const Designator *d = &designator;
 	do {
@@ -507,7 +512,7 @@ else {
 				
 				indexes.push_back(
 					llvm::ConstantInt::get(
-						fGenerator.fTypeInteger64, field.fIndex
+						fGenerator.fTypeInteger32, field.fIndex
 						)
 					);
 				}
@@ -862,15 +867,23 @@ void Generator::Module::emit(
 	const VariableDeclaration &declaration
 	)
 {
+llvm::Type *const type = fGenerator.mapType(*declaration.fType);
+
 // emit code to create global variable
 (void) fGlobals.try_emplace(
 	&declaration,
 	new llvm::GlobalVariable(
 		*fModule,
-		fGenerator.mapType(*declaration.fType),
+		type,
 		false /* isConstant */,
-		llvm::GlobalValue::PrivateLinkage,
-		nullptr,
+		
+		/* Actually should just be PrivateLinkage, but make it external so
+		   I could make the test verify this. */
+		llvm::GlobalValue::ExternalLinkage,
+		
+		// global variable definition must be initialized, even if with an undefined value
+		llvm::UndefValue::get(type),
+		
 		fGenerator.mangleName(declaration)
 		)
 	);

@@ -2,6 +2,10 @@
 #include <llvm/CodeGen/CommandFlags.h>
 #include <llvm/IR/IRPrintingPasses.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Analysis/AliasAnalysis.h>
+// #include <llvm/Analysis/TargetTransformInfo.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Host.h>
@@ -32,6 +36,12 @@ static const char
 	gVersion[] = "0.9";
 
 
+/*
+
+	command-line options
+
+*/
+
 static llvm::cl::list<std::string> gInputFiles(
 	llvm::cl::Positional,
 	llvm::cl::desc("<input-files>")
@@ -48,6 +58,36 @@ static llvm::cl::opt<bool> gEmitLLVM(
 	llvm::cl::init(false)
 	);
 
+static llvm::cl::opt<signed char> gOptimizationLevel(
+	llvm::cl::desc("Setting the optimization level:"),
+	llvm::cl::ZeroOrMore,
+	llvm::cl::values(
+		llvm::cl::OptionEnumValue { "O", 3, "Equivalent to -O3" },
+		llvm::cl::OptionEnumValue { "O0", 0, "Optimization level 0" },
+		llvm::cl::OptionEnumValue { "O1", 1, "Optimization level 1" },
+		llvm::cl::OptionEnumValue { "O2", 2, "Optimization level 2" },
+		llvm::cl::OptionEnumValue { "O3", 3, "Optimization level 3" },
+		llvm::cl::OptionEnumValue { "Os", -1, "Like -O2 with extra optimizations for size" },
+		llvm::cl::OptionEnumValue { "Oz", -2, "Like -Os but reduces code size further" }
+		),
+	llvm::cl::init(0)
+	);
+
+static llvm::cl::opt<std::string> gPassPipeline(
+	"passes",
+	llvm::cl::desc("A description of the pass pipeline")
+	);
+
+static llvm::cl::list<std::string> gPassPlugins(
+	"load-pass-plugin",
+	llvm::cl::desc("Load passes from plugin library")
+	);
+
+static llvm::cl::opt<bool> gDebugPassManager(
+	"debug-pass-manager",
+	llvm::cl::Hidden,
+	llvm::cl::desc("Print Pass Manager debugging information")
+	);
 
 // register codegen-related command-line options
 static llvm::codegen::RegisterCodeGenFlags gCodeGenerationFlags;
@@ -148,6 +188,10 @@ return outputFileName;
 }
 
 
+#define HANDLE_EXTENSION(extension) llvm::PassPluginLibraryInfo get##extension##PluginInfo();
+#include <llvm/Support/Extension.def>
+
+
 /*	emit
 
 */
@@ -157,6 +201,71 @@ static void emit(
 	llvm::StringRef	inputFileName
 	)
 {
+llvm::PassBuilder passBuilder(&machine);
+
+for (const std::string &plugInName: gPassPlugins) {
+	llvm::Expected<llvm::PassPlugin> plugIn = llvm::PassPlugin::Load(plugInName);
+	if (!plugIn) {
+		llvm::WithColor::error(llvm::errs(), gProgramName) << "Failed to load passes from '" << plugInName << "'";
+		continue;
+		}
+	
+	plugIn->registerPassBuilderCallbacks(passBuilder);
+	}
+
+#define HANDLE_EXTENSION(extension) get##extension##PluginInfo().RegisterPassBuilderCallbacks(passBuilder);
+#include <llvm/Support/Extension.def>
+
+llvm::LoopAnalysisManager loopAnalysisManager(gDebugPassManager);
+llvm::FunctionAnalysisManager functionAnalysisManager(gDebugPassManager);
+llvm::CGSCCAnalysisManager cgsccAnalysisManager(gDebugPassManager);
+llvm::ModuleAnalysisManager moduleAnalysisManager(gDebugPassManager);
+
+// "register the alias analysis manager first so that our version is the one used"
+functionAnalysisManager.registerPass(
+	[&]() { return passBuilder.buildDefaultAAPipeline(); }
+	);
+
+// register the basic analyses with the managers
+passBuilder.registerModuleAnalyses(moduleAnalysisManager);
+passBuilder.registerCGSCCAnalyses(cgsccAnalysisManager);
+passBuilder.registerFunctionAnalyses(functionAnalysisManager);
+passBuilder.registerLoopAnalyses(loopAnalysisManager);
+passBuilder.crossRegisterProxies(
+	loopAnalysisManager,
+	functionAnalysisManager,
+	cgsccAnalysisManager,
+	moduleAnalysisManager
+	);
+
+// "register pipeline extension point"
+passBuilder.registerPipelineStartEPCallback(
+	[](
+		llvm::ModulePassManager &modulePassManager,
+		llvm::PassBuilder::OptimizationLevel level
+		) {
+		llvm::outs() << "Run\n";
+		}
+	);
+
+llvm::ModulePassManager modulePassManager(gDebugPassManager);
+
+static const char *const gOptimizationLevels[] = {
+	/* -2 */ "default<Oz>",
+	/* -1 */ "default<Os>",
+	/*  0 */ "default<O0>",
+	/*  1 */ "default<O1>",
+	/*  2 */ "default<O2>",
+	/*  3 */ "default<O3>"
+	};
+
+// explicit pass pipeline specified?
+llvm::StringRef pass =
+	!gPassPipeline.empty() ?
+		static_cast<llvm::StringRef>(gPassPipeline) :
+		static_cast<llvm::StringRef>(gOptimizationLevels[gOptimizationLevel + 2]);
+if (llvm::Error error = passBuilder.parsePassPipeline(modulePassManager, pass)) throw error;
+
 const bool isFileTypeAssembly = llvm::codegen::getFileType() == llvm::CGFT_AssemblyFile;
 
 // open the file
@@ -169,13 +278,23 @@ std::unique_ptr<llvm::ToolOutputFile> outputFile = std::make_unique<llvm::ToolOu
 if (error) throw error;
 
 llvm::legacy::PassManager passManager;
+
+passManager.add(
+	createTargetTransformInfoWrapperPass(
+		machine.getTargetIRAnalysis()
+		)
+	);
+
 if (isFileTypeAssembly)
+	// add a pass that prints IR
 	passManager.add(llvm::createPrintModulePass(outputFile->os()));
 
 else
+	// let target machine add required code generation passes
 	if (machine.addPassesToEmitFile(passManager, outputFile->os(), nullptr, llvm::codegen::getFileType()))
 		throw "no support for file type";
 
+modulePassManager.run(*module, moduleAnalysisManager);
 passManager.run(*module);
 outputFile->keep();
 }

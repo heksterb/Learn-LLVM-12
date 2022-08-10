@@ -240,6 +240,7 @@ Expression *Parser::parseFactorFromIdentifier()
 Expression *factor;
 
 Declaration *declaration = parseQualifiedIdentifier();
+	if (!declaration) return nullptr;
 
 if (advanceIf(Token::kParenthesisLeft)) {
 	Expressions expressions;
@@ -719,8 +720,8 @@ try {
 		Token token = expect(Token::kIdentifier);
 		
 		declaration = fActions.qualifiedIdentifierPart(declaration, token);
+		if (!declaration) return nullptr;
 		}
-		
 		while (declaration->fKind == Declaration::kModule && advanceIf(Token::kPeriod));
 	}
 
